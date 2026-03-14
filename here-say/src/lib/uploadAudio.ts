@@ -1,43 +1,32 @@
-import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
-import { collection, addDoc, serverTimestamp } from 'firebase/firestore';
-import { db, storage } from './firebase';
-import type { KioskSettings } from '@/src/types';
-
-// Firestoreのコレクション名
-const COLLECTION_NAME = 'voiceRecords';
+import type { KioskSettings, VoiceRecord } from '@/src/types';
 
 /**
- * 音声BlobをCloud Storageにアップロードし、
- * メタデータ（URL・位置情報・日時）をFirestoreに保存する。
+ * 音声BlobをローカルAPIにアップロードし、
+ * メタデータ（URL・位置情報・日時）をローカルJSONに保存する。
  *
  * @param audioBlob - 録音済みの音声データ
- * @param settings  - キオスク設置場所の設定情報（localStorageから取得済みのもの）
- * @returns FirestoreドキュメントのID
+ * @param settings  - キオスク設置場所の設定情報
+ * @returns 保存されたレコード
  */
 export async function uploadAudioAndSaveRecord(
   audioBlob: Blob,
   settings: KioskSettings
-): Promise<string> {
-  // --- 1. Cloud Storageへのアップロード ---
-  // ファイル名は「タイムスタンプ + ランダム文字列」で衝突を回避
-  const fileName = `voices/${Date.now()}_${Math.random().toString(36).slice(2)}.webm`;
-  const storageRef = ref(storage, fileName);
+): Promise<VoiceRecord> {
+  const formData = new FormData();
+  formData.append('audio', audioBlob, 'recording.webm');
+  formData.append('placeName', settings.placeName);
+  formData.append('latitude', String(settings.latitude));
+  formData.append('longitude', String(settings.longitude));
 
-  await uploadBytes(storageRef, audioBlob, {
-    contentType: audioBlob.type || 'audio/webm',
+  const response = await fetch('/api/recordings', {
+    method: 'POST',
+    body: formData,
   });
 
-  // アップロード後にダウンロードURLを取得
-  const audioUrl = await getDownloadURL(storageRef);
+  if (!response.ok) {
+    const body = (await response.json()) as { error?: string };
+    throw new Error(body.error ?? `サーバーエラー (${response.status})`);
+  }
 
-  // --- 2. Firestoreへのメタデータ保存 ---
-  const docRef = await addDoc(collection(db, COLLECTION_NAME), {
-    audioUrl,
-    placeName: settings.placeName,
-    latitude: settings.latitude,
-    longitude: settings.longitude,
-    createdAt: serverTimestamp(), // サーバー側の正確な時刻を使用
-  });
-
-  return docRef.id;
+  return response.json() as Promise<VoiceRecord>;
 }

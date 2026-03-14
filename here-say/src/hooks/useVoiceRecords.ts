@@ -1,35 +1,18 @@
 'use client';
 
-import { useState, useEffect } from 'react';
-import {
-  collection,
-  query,
-  where,
-  orderBy,
-  limit,
-  onSnapshot,
-} from 'firebase/firestore';
-import { db } from '@/src/lib/firebase';
+import { useState, useEffect, useCallback } from 'react';
 import type { VoiceRecord } from '@/src/types';
 
-export interface VoiceRecordWithId extends VoiceRecord {
-  id: string;
-}
-
 /**
- * 指定した場所名に紐づく最新10件の音声レコードをリアルタイムで取得するフック。
- * 新しいレコードが追加されると自動的に一覧が更新される。
- *
- * ⚠️ Firestoreで `placeName` + `createdAt` の複合インデックスが必要です。
- * 初回実行時にコンソールに表示されるリンクからインデックスを作成してください。
+ * 指定した場所名の最新10件をローカルAPIから取得するフック。
+ * 10秒ごとに自動ポーリングし、新しい録音が追加されると一覧が更新される。
  */
 export function useVoiceRecords(placeName: string) {
-  const [records, setRecords] = useState<VoiceRecordWithId[]>([]);
+  const [records, setRecords] = useState<VoiceRecord[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    // 場所名が未設定の場合は何もしない
+  const fetchRecords = useCallback(async () => {
     if (!placeName.trim()) {
       setRecords([]);
       return;
@@ -38,31 +21,26 @@ export function useVoiceRecords(placeName: string) {
     setIsLoading(true);
     setError(null);
 
-    const q = query(
-      collection(db, 'voiceRecords'),
-      where('placeName', '==', placeName),
-      orderBy('createdAt', 'desc'),
-      limit(10)
-    );
-
-    const unsubscribe = onSnapshot(
-      q,
-      (snapshot) => {
-        const data: VoiceRecordWithId[] = snapshot.docs.map((doc) => ({
-          id: doc.id,
-          ...(doc.data() as VoiceRecord),
-        }));
-        setRecords(data);
-        setIsLoading(false);
-      },
-      () => {
-        setError('音声データの取得に失敗しました。');
-        setIsLoading(false);
-      }
-    );
-
-    return () => unsubscribe();
+    try {
+      const res = await fetch(
+        `/api/recordings?placeName=${encodeURIComponent(placeName)}`
+      );
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = (await res.json()) as VoiceRecord[];
+      setRecords(data);
+    } catch {
+      setError('音声データの取得に失敗しました。');
+    } finally {
+      setIsLoading(false);
+    }
   }, [placeName]);
 
-  return { records, isLoading, error };
+  useEffect(() => {
+    fetchRecords();
+    // 10秒ごとに再取得（リアルタイム性の代替）
+    const interval = setInterval(fetchRecords, 10_000);
+    return () => clearInterval(interval);
+  }, [fetchRecords]);
+
+  return { records, isLoading, error, refetch: fetchRecords };
 }

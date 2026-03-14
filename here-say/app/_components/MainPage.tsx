@@ -6,7 +6,6 @@ import { useAudioRecorder } from '@/src/hooks/useAudioRecorder';
 import { useVoiceRecords } from '@/src/hooks/useVoiceRecords';
 import { uploadAudioAndSaveRecord } from '@/src/lib/uploadAudio';
 import type { KioskSettings } from '@/src/types';
-import { Timestamp } from 'firebase/firestore';
 
 // ─── アップロード状態の型 ────────────────────────────────────────────
 type UploadStatus = 'idle' | 'uploading' | 'done' | 'error';
@@ -18,10 +17,10 @@ function formatTime(seconds: number): string {
   return `${m}:${s.toString().padStart(2, '0')}`;
 }
 
-// ─── Firestore Timestamp を相対時間表示に変換 ─────────────────────────
-function formatRelativeTime(timestamp: Timestamp | null): string {
-  if (!timestamp) return '投稿中...';
-  const date = timestamp.toDate();
+// ─── ISO文字列を相対時間表示に変換 ───────────────────────────────────
+function formatRelativeTime(createdAt: string): string {
+  if (!createdAt) return '投稿中...';
+  const date = new Date(createdAt);
   const diffSec = Math.floor((Date.now() - date.getTime()) / 1000);
   if (diffSec < 60) return 'たった今';
   if (diffSec < 3600) return `${Math.floor(diffSec / 60)}分前`;
@@ -197,7 +196,7 @@ export default function MainPage() {
     stopRecording,
     resetRecording,
   } = useAudioRecorder();
-  const { records, isLoading: recordsLoading, error: recordsError } =
+  const { records, isLoading: recordsLoading, error: recordsError, refetch } =
     useVoiceRecords(settings.placeName);
 
   const [showSettings, setShowSettings] = useState(false);
@@ -214,19 +213,25 @@ export default function MainPage() {
       try {
         await uploadAudioAndSaveRecord(audioBlob, settings);
         setUploadStatus('done');
+        // 一覧を即時更新
+        refetch();
         // 3秒後に状態をリセットして次の録音に備える
         setTimeout(() => {
           resetRecording();
           setUploadStatus('idle');
         }, 3000);
-      } catch {
+      } catch (err) {
+        // エラーの詳細をコンソールに出力してデバッグしやすくする
+        console.error('[uploadAudio] error:', err);
+        const message =
+          err instanceof Error ? err.message : String(err);
         setUploadStatus('error');
-        setUploadError('アップロードに失敗しました。再度お試しください。');
+        setUploadError(`アップロード失敗: ${message}`);
       }
     };
 
     upload();
-  }, [recorderStatus, audioBlob, isConfigured, settings, resetRecording]);
+  }, [recorderStatus, audioBlob, isConfigured, settings, resetRecording, refetch]);
 
   // ステータスメッセージ
   const statusMessage = (() => {
@@ -356,7 +361,7 @@ export default function MainPage() {
         )}
 
         <ul className="space-y-3">
-          {records.map((record: import('@/src/hooks/useVoiceRecords').VoiceRecordWithId, index: number) => (
+          {records.map((record, index: number) => (
             <li
               key={record.id}
               className="flex flex-col gap-2 rounded-2xl bg-white px-5 py-4 shadow-sm"
